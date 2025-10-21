@@ -30,6 +30,10 @@ if !exists('g:claude_aws_profile')
   let g:claude_aws_profile = ''
 endif
 
+if !exists('g:claude_use_venv')
+  let g:claude_use_venv = 1
+endif
+
 if !exists('g:claude_map_implement')
   let g:claude_map_implement = '<leader>ci'
 endif
@@ -67,6 +71,31 @@ augroup ClaudeKeybindings
   autocmd VimEnter * call s:SetupClaudeKeybindings()
 augroup END
 
+" ============================================================================
+" Virtual Environment Test Command
+" ============================================================================
+
+function! s:TestVenv()
+  echo "Testing virtual environment setup..."
+  let l:venv_python = s:GetVenvPython()
+  echo "Using Python: " . l:venv_python
+
+  " Test boto3 import
+  let l:test_cmd = [l:venv_python, '-c', 'import boto3; print("boto3 version:", boto3.__version__)']
+  let l:result = system(join(l:test_cmd, ' '))
+  let l:exit_code = v:shell_error
+
+  if l:exit_code == 0
+    echo "✓ Virtual environment is working correctly"
+    echo l:result
+  else
+    echo "✗ Virtual environment test failed:"
+    echo l:result
+  endif
+endfunction
+
+command! ClaudeTestVenv call s:TestVenv()
+
 """""""""""""""""""""""""""""""""""""
 
 let s:plugin_dir = expand('<sfile>:p:h')
@@ -88,6 +117,48 @@ endif
 
 
 " ============================================================================
+" Virtual Environment Management
+" ============================================================================
+
+function! s:GetVenvPython()
+  " If virtual environment is disabled, use system python3
+  if !g:claude_use_venv
+    return 'python3'
+  endif
+
+  let l:setup_script = s:plugin_dir . '/setup_venv.py'
+
+  " Check if setup script exists
+  if !filereadable(l:setup_script)
+    echoerr "Virtual environment setup script not found: " . l:setup_script
+    return 'python3'
+  endif
+
+  " Run setup script and capture the Python path
+  let l:result = system('python3 ' . shellescape(l:setup_script))
+  let l:exit_code = v:shell_error
+
+  if l:exit_code != 0
+    echoerr "Failed to setup virtual environment: " . l:result
+    return 'python3'
+  endif
+
+  " Extract Python path from the output
+  let l:lines = split(l:result, "\n")
+  for l:line in l:lines
+    if l:line =~ '^Python executable:'
+      let l:python_path = substitute(l:line, '^Python executable:\s*', '', '')
+      if filereadable(l:python_path)
+        return l:python_path
+      endif
+    endif
+  endfor
+
+  echoerr "Could not determine virtual environment Python path"
+  return 'python3'
+endfunction
+
+" ============================================================================
 " Claude API
 " ============================================================================
 
@@ -99,7 +170,8 @@ function! s:ClaudeQueryInternal(messages, system_prompt, tools, stream_callback,
 
   if g:claude_use_bedrock
     let l:python_script = s:plugin_dir . '/claude_bedrock_helper.py'
-    let l:cmd = ['python3', l:python_script,
+    let l:venv_python = s:GetVenvPython()
+    let l:cmd = [l:venv_python, l:python_script,
           \ '--region', g:claude_bedrock_region,
           \ '--model-id', g:claude_bedrock_model_id,
           \ '--messages', json_encode(a:messages),
